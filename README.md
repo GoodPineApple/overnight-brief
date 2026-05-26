@@ -33,7 +33,33 @@ npm run process   # AI 요약 (수동 실행)
 npm run send      # 이메일 발송 (수동 실행)
 ```
 
-## 배포
+## 배포 (Vercel + GitHub)
 
-- Vercel에 연결하고 환경변수 등록.
-- GitHub Actions Secrets에 동일한 값 등록 → 새벽 2/4시·오전 8시 자동 실행.
+### 1. Vercel 배포
+
+1. https://vercel.com 에서 GitHub 계정으로 로그인.
+2. **Add New → Project** → 이 리포 선택 → **Import**.
+3. **Environment Variables** 섹션에서 `.env.example`의 모든 키 등록.
+   - `NEXT_PUBLIC_*` 키는 Production/Preview/Development 모두 체크.
+4. **Deploy** 클릭. 배포 도메인 확인 (예: `overnight-brief.vercel.app`).
+5. **Supabase Auth 콜백 URL 갱신**: Supabase Authentication → URL Configuration → Redirect URLs에 `https://<배포도메인>/api/auth/callback` 추가.
+6. **Google OAuth 콜백 URL 갱신**: Google Cloud Console → OAuth Client → 승인된 리디렉션 URI에 위 URL 추가.
+
+이후 `main` 브랜치에 push 시 Vercel이 자동으로 재배포합니다.
+
+### 2. GitHub Actions Cron 자동화
+
+Repo Settings → Secrets and variables → Actions → **New repository secret** 으로 등록:
+
+```
+NEXT_PUBLIC_SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+NEWS_API_KEY
+OPENAI_API_KEY
+GMAIL_USER
+GMAIL_CLIENT_ID
+GMAIL_CLIENT_SECRET
+GMAIL_REFRESH_TOKEN
+```
+
+이후 매일 KST 02시(수집) → 04시(AI) → 08시(발송)에 자동 실행됩니다. 수동 실행은 Actions 탭 → Overnight Brief Pipeline → Run workflow.

@@ -1,0 +1,70 @@
+name: Overnight Brief Pipeline
+
+on:
+  schedule:
+    - cron: '0 17 * * *'   # UTC 17:00 = KST 02:00 → 뉴스 수집
+    - cron: '0 19 * * *'   # UTC 19:00 = KST 04:00 → AI 처리
+    - cron: '0 23 * * *'   # UTC 23:00 = KST 08:00 → 이메일 발송
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Run a specific job (collect, process, send)'
+        required: true
+        default: 'collect'
+        type: choice
+        options:
+          - collect
+          - process
+          - send
+
+jobs:
+  collect:
+    if: github.event.schedule == '0 17 * * *' || github.event.inputs.job == 'collect'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run collect
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+
+  process:
+    if: github.event.schedule == '0 19 * * *' || github.event.inputs.job == 'process'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run process
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+  send:
+    if: github.event.schedule == '0 23 * * *' || github.event.inputs.job == 'send'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run send
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}

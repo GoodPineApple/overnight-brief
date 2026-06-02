@@ -63,3 +63,15 @@ GMAIL_REFRESH_TOKEN
 ```
 
 이후 매일 KST 02시(수집) → 04시(AI) → 08시(발송)에 자동 실행됩니다. 수동 실행은 Actions 탭 → Overnight Brief Pipeline → Run workflow.
+
+## 작업일지
+
+### 20260602
+
+- AI가 생성한 프로젝트 코드 리뷰
+- supabase 기본 셋팅
+- Backlog 작성하는 md 규칙 생성
+- 이슈 확인중
+
+1.  Supabase Auth는 이메일 로그인 발신이 시간당 2개다. => supabase auth 미사용, JWT 직접구현
+2.  사용자 테이블에 데이터가 생성되지 않아서, 연계되는 다른 테이블에도 데이터 생성이 안됨. (foreign key 없음 오류)

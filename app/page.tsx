@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from "next/link";
 
 export default function LandingPage() {
   return (
@@ -7,7 +7,10 @@ export default function LandingPage() {
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="font-bold text-lg">OVERNIGHT BRIEF</div>
           <div className="flex gap-3">
-            <Link href="/auth/login" className="px-4 py-2 text-sm hover:underline">
+            <Link
+              href="/auth/login"
+              className="px-4 py-2 text-sm hover:underline"
+            >
               로그인
             </Link>
             <Link
@@ -32,8 +35,12 @@ export default function LandingPage() {
         </p>
 
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-8 mb-12 text-left">
-          <div className="text-xs text-gray-500 mb-2">#AI바이브코딩 · TechCrunch</div>
-          <div className="font-semibold mb-3">OpenAI releases GPT-5 with major reasoning gains</div>
+          <div className="text-xs text-gray-500 mb-2">
+            #AI바이브코딩 · TechCrunch
+          </div>
+          <div className="font-semibold mb-3">
+            OpenAI releases GPT-5 with major reasoning gains
+          </div>
           <ul className="text-sm text-gray-700 space-y-1 list-disc list-inside mb-3">
             <li>OpenAI가 GPT-5를 공개했습니다.</li>
             <li>이번 모델은 기존 대비 추론 능력이 3배 향상되었습니다.</li>

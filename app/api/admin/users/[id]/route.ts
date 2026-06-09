@@ -36,8 +36,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = createSupabaseAdminClient();
-  await supabase.from('users').delete().eq('id', id);
-  const { error } = await supabase.auth.admin.deleteUser(id);
+  const { error } = await supabase.from('users').delete().eq('id', id);
   if (error) return new NextResponse(error.message, { status: 500 });
   return NextResponse.json({ ok: true });
 }

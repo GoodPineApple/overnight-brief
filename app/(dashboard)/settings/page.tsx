@@ -1,19 +1,20 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
+import { getUserFromCookies } from '@/lib/auth';
+import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { KeywordsSection } from './keywords-section';
 import { ChannelsSection } from './channels-section';
 import { SubscriptionSection } from './subscription-section';
 
 export default async function SettingsPage() {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+  const user = await getUserFromCookies();
+  if (!user) redirect('/auth/login');
+
+  const db = createSupabaseAdminClient();
 
   const [{ data: userRow }, { data: keywords }, { data: channels }] = await Promise.all([
-    supabase.from('users').select('status').eq('id', user.id).single(),
-    supabase.from('keywords').select('*').eq('user_id', user.id).order('created_at'),
-    supabase.from('notification_channels').select('*').eq('user_id', user.id).order('created_at'),
+    db.from('users').select('status').eq('id', user.sub).single(),
+    db.from('keywords').select('*').eq('user_id', user.sub).order('created_at'),
+    db.from('notification_channels').select('*').eq('user_id', user.sub).order('created_at'),
   ]);
 
   return (

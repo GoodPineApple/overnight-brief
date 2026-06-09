@@ -12,7 +12,7 @@
 | **Frontend** | Next.js 14+ (App Router) + TypeScript | 랜딩 + API 라우트 일원화, Vercel 배포 최적화 |
 | **Styling** | Tailwind CSS | 빠른 UI 구현 |
 | **DB** | Supabase (PostgreSQL) | 오픈소스, Auth·Storage 내장, 무료 티어 |
-| **인증** | Supabase Auth | Google 소셜 로그인 + 매직 링크 이메일 로그인 |
+| **인증** | 이메일+비밀번호 (bcryptjs + jose JWT) + Google OAuth 2.0 직접 구현 | Supabase Auth 미사용, 자체 세션 쿠키 관리 |
 | **스케줄러** | GitHub Actions (cron) | 별도 서버 없이 무료로 새벽 배치 실행 |
 | **뉴스 수집** | NewsAPI.org + Cheerio | API로 주요 외신 수집, Cheerio로 보조 크롤링 |
 | **AI 요약** | OpenAI API (GPT-4o mini) | 가성비 최적, 한국어 요약 품질 우수 |
@@ -204,7 +204,8 @@ overnight-brief/
 │   ├── layout.tsx
 │   │
 │   ├── auth/
-│   │   └── login/page.tsx                  # 로그인 / 회원가입 (Google + 매직링크)
+│   │   ├── login/page.tsx                  # 로그인 (이메일+비밀번호 / Google 로그인)
+│   │   └── signup/page.tsx                 # 회원가입 (이메일+비밀번호)
 │   │
 │   ├── (dashboard)/                        # 인증된 유저 전용 영역
 │   │   ├── layout.tsx                      # 상단 nav (로고·설정·로그아웃)
@@ -221,7 +222,7 @@ overnight-brief/
 │   │       └── [id]/page.tsx               # 회원 상세 (키워드·채널·발송이력)
 │   │
 │   └── api/                                # route.ts는 모두 여기에 집중
-│       ├── auth/callback/route.ts          # Supabase Auth 콜백 (OAuth redirect URI)
+│       ├── auth/callback/route.ts          # Google OAuth 2.0 콜백 (code → 토큰 교환 → JWT 세션 발급)
 │       ├── keywords/route.ts               # GET·POST·DELETE 키워드 관리
 │       ├── channels/route.ts               # GET·POST·DELETE·PATCH 알림 채널 관리
 │       ├── subscription/route.ts           # PATCH 구독 상태 변경 (active/inactive)
@@ -240,7 +241,8 @@ overnight-brief/
 │   └── send-emails.ts                     # 이메일 발송 (오전 8시)
 │
 ├── lib/
-│   ├── supabase.ts                        # Supabase 클라이언트 (서버용 / 클라이언트용)
+│   ├── supabase.ts                        # Supabase 클라이언트 (서버용 / 클라이언트용, DB 전용)
+│   ├── auth.ts                            # JWT signToken/verifyToken/세션 쿠키 유틸
 │   ├── openai.ts                          # OpenAI 클라이언트 + 요약 프롬프트
 │   ├── mailer.ts                          # Gmail API + Nodemailer 발송 함수
 │   └── notifier.ts                        # Slack·Discord 웹훅 발송 함수
@@ -257,10 +259,17 @@ overnight-brief/
 ## 6. 환경변수 목록
 
 ```bash
-# Supabase
+# Supabase (DB 전용, Auth 미사용)
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=        # 배치 스크립트 전용 (RLS 우회)
+
+# JWT (이메일 로그인 세션 서명용)
+JWT_SECRET=                       # openssl rand -base64 32 으로 생성
+
+# Google OAuth 2.0 (구글 로그인, Supabase Auth 미사용 — 직접 구현)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
 
 # OpenAI
 OPENAI_API_KEY=
@@ -350,7 +359,8 @@ jobs:
 | 경로 | 화면명 | 접근 | 설명 |
 |------|--------|------|------|
 | `/` | 랜딩 페이지 | 비로그인 | 서비스 소개 + 회원가입 CTA |
-| `/auth/login` | 로그인/회원가입 | 비로그인 | Google OAuth + 매직링크 |
+| `/auth/login` | 로그인 | 비로그인 | 이메일+비밀번호 / Google OAuth |
+| `/auth/signup` | 회원가입 | 비로그인 | 이메일+비밀번호 회원가입 |
 | `/settings` | 유저 설정 | 로그인 필요 | 키워드·채널·구독 통합 관리 |
 | `/admin` | 파이프라인 현황 | 어드민 전용 | 오늘 수집·처리·발송 현황 |
 | `/admin/queue` | 발송 큐 미리보기 | 어드민 전용 | 발송 전 아이템 검토·수정 |
@@ -378,11 +388,11 @@ jobs:
 └─────────────────────────────────────────────────────────┘
 ```
 
-**동작:** 이메일 입력 후 → `/auth/login?email=...`으로 이동, 매직링크 발송 또는 Google 로그인 유도.
+**동작:** 이메일 입력 후 → `/auth/signup?email=...`으로 이동, 회원가입 폼 또는 Google 로그인 유도.
 
 ---
 
-### 8-2. 로그인 / 회원가입 페이지 (`/auth/login`)
+### 8-2. 로그인 페이지 (`/auth/login`)
 
 ```
 ┌─────────────────────────────────┐
@@ -396,14 +406,47 @@ jobs:
 │   ┌───────────────────────┐     │
 │   │ you@example.com       │     │
 │   └───────────────────────┘     │
-│   [매직 링크 보내기]              │
+│   비밀번호                       │
+│   ┌───────────────────────┐     │
+│   │ ••••••                │     │
+│   └───────────────────────┘     │
+│   [로그인]                       │
 │                                 │
-│   * 가입/로그인 구분 없음.         │
-│     링크 클릭 시 자동 계정 생성.   │
+│   계정이 없으신가요? [회원가입 →]  │
 └─────────────────────────────────┘
 ```
 
-**동작:** Supabase Auth 처리 → 콜백 후 `/settings`로 리다이렉트 (신규 유저는 키워드 미설정 상태).
+**동작:** 이메일+비밀번호 로그인 → JWT 세션 쿠키 발급 → `/settings`로 리다이렉트. Google 버튼 클릭 → Google OAuth 인증 → `/api/auth/callback` 콜백 → JWT 세션 쿠키 발급 → `/settings` 리다이렉트.
+
+### 8-3. 회원가입 페이지 (`/auth/signup`)
+
+```
+┌─────────────────────────────────┐
+│         Overnight Brief         │
+│                                 │
+│   [G] Google 계정으로 계속하기    │
+│                                 │
+│   ──────── 또는 ────────         │
+│                                 │
+│   이메일 주소                    │
+│   ┌───────────────────────┐     │
+│   │ you@example.com       │     │
+│   └───────────────────────┘     │
+│   비밀번호 (6자 이상)             │
+│   ┌───────────────────────┐     │
+│   │ ••••••                │     │
+│   └───────────────────────┘     │
+│   비밀번호 확인                   │
+│   ┌───────────────────────┐     │
+│   │ ••••••                │     │
+│   └───────────────────────┘     │
+│   [회원가입]                     │
+│                                 │
+│   이미 계정이 있으신가요? [로그인 →]│
+└─────────────────────────────────┘
+```
+
+**동작:** 이메일+비밀번호 회원가입 → users 테이블 insert + bcrypt 해시 저장 → JWT 세션 쿠키 발급 → `/settings`로 리다이렉트.
 
 ---
 
@@ -664,8 +707,10 @@ Human-in-the-loop 검토 화면. 오늘 오전 8시 발송 예정 아이템을 �
 ## 11. 4주 마일스톤
 
 ### 1주차 — 환경 구축
-- [ ] Supabase 프로젝트 생성 + 스키마 적용 (`notification_channels` 포함)
+- [ ] Supabase 프로젝트 생성 + 스키마 적용 (`0001_init.sql` → `0002_add_password_hash.sql`)
 - [ ] Next.js 프로젝트 초기화 (`npx create-next-app@latest`)
+- [ ] JWT_SECRET 생성 + 이메일+비밀번호 인증 구현 (bcryptjs + jose)
+- [ ] Google OAuth 2.0 클라이언트 발급 + `/api/auth/callback` 직접 구현
 - [ ] NewsAPI 키 발급 + 수집 스크립트 로컬 테스트
 - [ ] Gmail API OAuth2 설정 + Refresh Token 발급
 - [ ] GitHub Actions 워크플로우 기본 설정 + Secrets 등록
@@ -680,7 +725,8 @@ Human-in-the-loop 검토 화면. 오늘 오전 8시 발송 예정 아이템을 �
 
 ### 3주차 — 프론트엔드
 - [ ] 랜딩 페이지 (`/`) — 소개문구 + 메일 예시 미리보기 + 가입 CTA
-- [ ] 로그인 페이지 (`/auth/login`) — Google OAuth + 매직링크
+- [ ] 로그인 페이지 (`/auth/login`) — 이메일+비밀번호 / Google OAuth
+- [ ] 회원가입 페이지 (`/auth/signup`) — 이메일+비밀번호
 - [ ] 유저 설정 페이지 (`/settings`) — 키워드·알림채널·구독 상태 관리
 - [ ] API 라우트 구현: `/api/keywords`, `/api/channels`, `/api/subscription`
 

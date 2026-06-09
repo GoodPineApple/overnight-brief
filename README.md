@@ -16,12 +16,13 @@ http://localhost:3000 에서 확인.
 
 ## 초기 설정
 
-1. **Supabase**: 새 프로젝트 생성 → SQL 에디터에서 `supabase/migrations/0001_init.sql` 실행 → URL과 키를 `.env.local`에 입력.
-2. **Supabase Auth**: Authentication → Providers에서 Google OAuth 활성화 + 매직링크 활성화. Redirect URL에 `http://localhost:3000/api/auth/callback` 추가.
-3. **NewsAPI**: https://newsapi.org 에서 키 발급.
-4. **OpenAI**: API 키 발급.
-5. **Gmail API**: Google Cloud Console에서 OAuth2 클라이언트 발급 → OAuth Playground로 Refresh Token 획득.
-6. **ADMIN_SECRET**: 임의의 강한 문자열 지정. 어드민 진입 시 브라우저 콘솔에서 `document.cookie = "admin_token=<값>; path=/"` 입력.
+1. **Supabase**: 새 프로젝트 생성 → SQL 에디터에서 `supabase/migrations/0001_init.sql` → `0002_add_password_hash.sql` 순서로 실행 → URL과 키를 `.env.local`에 입력.
+2. **Google OAuth (구글 로그인)**: Google Cloud Console에서 OAuth 2.0 클라이언트 생성 → `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 발급. 승인된 리디렉션 URI에 `http://localhost:3000/api/auth/callback` 추가.
+3. **JWT_SECRET**: `openssl rand -base64 32` 명령으로 임의의 강한 문자열 생성 후 `.env.local`에 입력.
+4. **NewsAPI**: https://newsapi.org 에서 키 발급.
+5. **OpenAI**: API 키 발급.
+6. **Gmail API**: Google Cloud Console에서 OAuth2 클라이언트 발급 → OAuth Playground로 Refresh Token 획득.
+7. **ADMIN_SECRET**: 임의의 강한 문자열 지정. 어드민 진입 시 브라우저 콘솔에서 `document.cookie = "admin_token=<값>; path=/"` 입력.
 
 ## 명령어
 
@@ -42,8 +43,7 @@ npm run send      # 이메일 발송 (수동 실행)
 3. **Environment Variables** 섹션에서 `.env.example`의 모든 키 등록.
    - `NEXT_PUBLIC_*` 키는 Production/Preview/Development 모두 체크.
 4. **Deploy** 클릭. 배포 도메인 확인 (예: `overnight-brief.vercel.app`).
-5. **Supabase Auth 콜백 URL 갱신**: Supabase Authentication → URL Configuration → Redirect URLs에 `https://<배포도메인>/api/auth/callback` 추가.
-6. **Google OAuth 콜백 URL 갱신**: Google Cloud Console → OAuth Client → 승인된 리디렉션 URI에 위 URL 추가.
+5. **Google OAuth 콜백 URL 갱신**: Google Cloud Console → OAuth Client → 승인된 리디렉션 URI에 `https://<배포도메인>/api/auth/callback` 추가.
 
 이후 `main` 브랜치에 push 시 Vercel이 자동으로 재배포합니다.
 
@@ -54,6 +54,9 @@ Repo Settings → Secrets and variables → Actions → **New repository secret*
 ```
 NEXT_PUBLIC_SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
+JWT_SECRET
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
 NEWS_API_KEY
 OPENAI_API_KEY
 GMAIL_USER
@@ -73,5 +76,19 @@ GMAIL_REFRESH_TOKEN
 - Backlog 작성하는 md 규칙 생성
 - 이슈 확인중
 
-1.  Supabase Auth는 이메일 로그인 발신이 시간당 2개다. => supabase auth 미사용, JWT 직접구현
+1.  Supabase Auth는 이메일 로그인 발신이 시간당 2개다. => supabase auth 미사용, 이메일+비밀번호 JWT 직접구현 / Google OAuth 2.0 직접 구현
 2.  사용자 테이블에 데이터가 생성되지 않아서, 연계되는 다른 테이블에도 데이터 생성이 안됨. (foreign key 없음 오류)
+
+### 20260602
+
+- supabase auth 미사용. 회원가입/로그인 체계 구현
+
+* 이메일 인증 (이메일+비밀번호, bcryptjs 해시 + jose JWT 직접 구현)
+* 소셜로그인 - Google OAuth 2.0 직접 구현 (Google Cloud Console 설정, Supabase Auth 미사용)
+
+- GCP overnight-brief 프로젝트 생성
+
+* gmail api 활성화
+* Google Login api 활성화
+* app 프로젝트 레이아웃 점검
+* 이메일 로그인 / 소셜로그인 기능 검증 필요

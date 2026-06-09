@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 
 export function SubscriptionSection({ initialStatus }: { initialStatus: 'active' | 'inactive' }) {
   const router = useRouter();
@@ -25,8 +24,7 @@ export function SubscriptionSection({ initialStatus }: { initialStatus: 'active'
     if (!confirm('계정과 모든 데이터를 삭제합니다. 되돌릴 수 없습니다. 계속하시겠습니까?')) return;
     const res = await fetch('/api/subscription', { method: 'DELETE' });
     if (res.ok) {
-      const supabase = createSupabaseBrowserClient();
-      await supabase.auth.signOut();
+      await fetch('/api/auth/logout', { method: 'POST' });
       router.push('/');
     }
   }

@@ -3,7 +3,9 @@ import { cookies } from 'next/headers';
 import { NextRequest } from 'next/server';
 
 const COOKIE_NAME = 'session_token';
+const OAUTH_STATE_COOKIE = 'oauth_state';
 const TOKEN_MAX_AGE = 60 * 60 * 24 * 7; // 7일
+const OAUTH_STATE_MAX_AGE = 60 * 10; // 10분
 
 function getSecret() {
   const secret = process.env.JWT_SECRET;
@@ -67,4 +69,32 @@ export function deleteSessionCookieOptions() {
     path: '/',
     maxAge: 0,
   };
+}
+
+export function oauthStateCookieOptions(state: string) {
+  return {
+    name: OAUTH_STATE_COOKIE,
+    value: state,
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    path: '/',
+    maxAge: OAUTH_STATE_MAX_AGE,
+  };
+}
+
+export function deleteOAuthStateCookieOptions() {
+  return {
+    name: OAUTH_STATE_COOKIE,
+    value: '',
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    path: '/',
+    maxAge: 0,
+  };
+}
+
+export function getOAuthStateFromRequest(req: NextRequest): string | null {
+  return req.cookies.get(OAUTH_STATE_COOKIE)?.value ?? null;
 }

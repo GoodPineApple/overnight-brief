@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
+import { randomInt } from 'crypto';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
 import { sendEmail } from '@/lib/mailer';
 
 function generateCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return randomInt(100000, 999999).toString();
 }
 
 export async function POST(req: NextRequest) {
@@ -21,28 +22,49 @@ export async function POST(req: NextRequest) {
 
   const db = createSupabaseAdminClient();
 
-  const { data: existing } = await db
+  const { data: existing, error: lookupErr } = await db
     .from('users')
-    .select('id')
+    .select('id, provider')
     .eq('email', email)
-    .single();
+    .maybeSingle();
+
+  if (lookupErr) {
+    console.error('[signup] lookup error:', lookupErr);
+    return NextResponse.json({ error: '처리 중 오류가 발생했습니다.' }, { status: 500 });
+  }
 
   if (existing) {
+    if (existing.provider === 'google') {
+      return NextResponse.json(
+        { error: '해당 이메일은 Google 계정으로 가입되어 있습니다. Google 로그인을 이용해주세요.' },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ error: '이미 등록된 이메일입니다.' }, { status: 409 });
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
   const code = generateCode();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10분
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
   // 기존 인증 요청 삭제 후 새로 생성
   await db.from('email_verifications').delete().eq('email', email);
-  await db.from('email_verifications').insert({
+
+  const { error: insertVerifErr } = await db.from('email_verifications').insert({
     email,
     code,
     password_hash: passwordHash,
     expires_at: expiresAt,
   });
+
+  if (insertVerifErr) {
+    console.error('[signup] email_verifications insert error:', insertVerifErr);
+    const hint =
+      insertVerifErr.code === '42501'
+        ? ' Supabase SQL 에디터에서 supabase/migrations/0004_grants.sql을 실행해주세요.'
+        : '';
+    return NextResponse.json({ error: `인증 코드 저장에 실패했습니다.${hint}` }, { status: 500 });
+  }
 
   // 인증 메일 발송
   try {
@@ -64,7 +86,7 @@ export async function POST(req: NextRequest) {
     console.error('[signup] 이메일 발송 실패:', err);
     await db.from('email_verifications').delete().eq('email', email);
     return NextResponse.json(
-      { error: '인증 이메일 발송에 실패했습니다. Gmail API 설정을 확인해주세요.' },
+      { error: '인증 이메일 발송에 실패했습니다. Gmail 설정을 확인해주세요.' },
       { status: 500 },
     );
   }

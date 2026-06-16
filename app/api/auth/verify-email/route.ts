@@ -13,12 +13,21 @@ export async function POST(req: NextRequest) {
 
   const db = createSupabaseAdminClient();
 
-  const { data: verification } = await db
+  const { data: verification, error: lookupErr } = await db
     .from('email_verifications')
     .select('*')
     .eq('email', email)
     .eq('code', code)
-    .single();
+    .maybeSingle();
+
+  if (lookupErr) {
+    console.error('[verify-email] lookup error:', lookupErr);
+    const hint =
+      lookupErr.code === '42501'
+        ? ' Supabase SQL 에디터에서 supabase/migrations/0004_grants.sql을 실행해주세요.'
+        : '';
+    return NextResponse.json({ error: `인증 처리 중 오류가 발생했습니다.${hint}` }, { status: 500 });
+  }
 
   if (!verification) {
     return NextResponse.json({ error: '인증 코드가 올바르지 않습니다.' }, { status: 400 });
@@ -30,7 +39,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 유저 생성
-  const { data: user, error } = await db
+  const { data: user, error: insertErr } = await db
     .from('users')
     .insert({
       email,
@@ -41,18 +50,29 @@ export async function POST(req: NextRequest) {
     .select('id, email')
     .single();
 
-  if (error || !user) {
+  if (insertErr || !user) {
+    console.error('[verify-email] user insert error:', JSON.stringify(insertErr));
+
+    if (insertErr?.code === '23505') {
+      await db.from('email_verifications').delete().eq('email', email);
+      return NextResponse.json({ error: '이미 가입된 이메일입니다. 로그인해주세요.' }, { status: 409 });
+    }
+
     return NextResponse.json({ error: '계정 생성에 실패했습니다.' }, { status: 500 });
   }
 
   // 기본 이메일 채널 자동 등록
-  await db.from('notification_channels').insert({
+  const { error: channelErr } = await db.from('notification_channels').insert({
     user_id: user.id,
     type: 'email',
     destination: email,
     label: '기본 이메일',
     is_active: true,
   });
+
+  if (channelErr) {
+    console.error('[verify-email] notification_channels insert error:', channelErr);
+  }
 
   // 인증 레코드 정리
   await db.from('email_verifications').delete().eq('email', email);

@@ -1,8 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+
+const ERROR_MESSAGES: Record<string, string> = {
+  google_auth_failed: 'Google 로그인에 실패했습니다. 다시 시도해주세요.',
+  no_email: 'Google 계정에서 이메일 정보를 가져올 수 없습니다.',
+  signup_failed: '계정 생성에 실패했습니다. 잠시 후 다시 시도해주세요.',
+  invalid_state: '로그인 요청이 만료되었거나 유효하지 않습니다. 다시 시도해주세요.',
+  account_inactive: '비활성화된 계정입니다. 관리자에게 문의해주세요.',
+};
 
 export default function LoginPage() {
   const router = useRouter();
@@ -10,6 +18,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const errorParam = new URLSearchParams(window.location.search).get('error');
+    if (errorParam) {
+      setError(ERROR_MESSAGES[errorParam] ?? '로그인에 실패했습니다.');
+    }
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

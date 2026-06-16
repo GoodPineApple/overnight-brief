@@ -4,6 +4,18 @@ import { verifyToken, getTokenFromRequest } from '@/lib/auth';
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // 로그인된 유저가 auth 페이지 접근 시 settings로 리다이렉트
+  if (pathname === '/auth/login' || pathname === '/auth/signup') {
+    const token = getTokenFromRequest(req);
+    if (token) {
+      const payload = await verifyToken(token);
+      if (payload) {
+        return NextResponse.redirect(new URL('/settings', req.url));
+      }
+    }
+    return NextResponse.next();
+  }
+
   // 어드민 영역: admin_token 쿠키 검증
   if (pathname.startsWith('/admin') || pathname.startsWith('/api/admin')) {
     const adminToken = req.cookies.get('admin_token')?.value;
@@ -35,6 +47,8 @@ export async function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
+    '/auth/login',
+    '/auth/signup',
     '/settings/:path*',
     '/api/keywords/:path*',
     '/api/channels/:path*',

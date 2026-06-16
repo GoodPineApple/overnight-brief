@@ -34,6 +34,7 @@ export default function SignupPage() {
 
     const data = await res.json();
     if (res.ok) {
+      setEmail((prev) => prev.trim().toLowerCase());
       setStep('verify');
     } else {
       setError(data.error || '회원가입에 실패했습니다.');

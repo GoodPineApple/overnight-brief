@@ -16,7 +16,7 @@ http://localhost:3000 에서 확인.
 
 ## 초기 설정
 
-1. **Supabase**: 새 프로젝트 생성 → SQL 에디터에서 `supabase/migrations/0001_init.sql` → `0002_add_password_hash.sql` 순서로 실행 → URL과 키를 `.env.local`에 입력.
+1. **Supabase**: 새 프로젝트 생성 → SQL 에디터에서 `supabase/migrations/` 아래 SQL을 **0001 → 0002 → 0003 → 0004** 순서로 실행 → URL과 키를 `.env.local`에 입력.
 2. **Google OAuth (구글 로그인)**: Google Cloud Console에서 OAuth 2.0 클라이언트 생성 → `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 발급. 승인된 리디렉션 URI에 `http://localhost:3000/api/auth/callback` 추가.
 3. **JWT_SECRET**: `openssl rand -base64 32` 명령으로 임의의 강한 문자열 생성 후 `.env.local`에 입력.
 4. **NewsAPI**: https://newsapi.org 에서 키 발급.
@@ -79,7 +79,7 @@ GMAIL_REFRESH_TOKEN
 1.  Supabase Auth는 이메일 로그인 발신이 시간당 2개다. => supabase auth 미사용, 이메일+비밀번호 JWT 직접구현 / Google OAuth 2.0 직접 구현
 2.  사용자 테이블에 데이터가 생성되지 않아서, 연계되는 다른 테이블에도 데이터 생성이 안됨. (foreign key 없음 오류)
 
-### 20260602
+### 20260609
 
 - supabase auth 미사용. 회원가입/로그인 체계 구현
 
@@ -92,3 +92,11 @@ GMAIL_REFRESH_TOKEN
 * Google Login api 활성화
 * app 프로젝트 레이아웃 점검
 * 이메일 로그인 / 소셜로그인 기능 검증 필요
+
+### 20260616
+
+- 로그인 검증
+
+*
+
+- 데이터베이스 연동

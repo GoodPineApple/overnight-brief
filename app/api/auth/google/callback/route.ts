@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { createSupabaseAdminClient } from '@/lib/supabase/server';
-import { signToken, sessionCookieOptions } from '@/lib/auth';
+import {
+  signToken,
+  sessionCookieOptions,
+  getOAuthStateFromRequest,
+  deleteOAuthStateCookieOptions,
+} from '@/lib/auth';
 
 function getOAuth2Client() {
   return new google.auth.OAuth2(
@@ -11,13 +16,32 @@ function getOAuth2Client() {
   );
 }
 
-export async function GET(req: NextRequest) {
-  const { searchParams, origin } = new URL(req.url);
-  const code = searchParams.get('code');
-  const error = searchParams.get('error');
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL!;
 
-  if (error || !code) {
-    return NextResponse.redirect(`${origin}/auth/login?error=google_auth_failed`);
+type AuthUser = { id: string; email: string; status?: string };
+
+function redirectWithError(error: string) {
+  return NextResponse.redirect(`${BASE_URL}/auth/login?error=${error}`);
+}
+
+function clearOAuthState(res: NextResponse) {
+  res.cookies.set(deleteOAuthStateCookieOptions());
+  return res;
+}
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const code = searchParams.get('code');
+  const errorParam = searchParams.get('error');
+  const state = searchParams.get('state');
+  const savedState = getOAuthStateFromRequest(req);
+
+  if (errorParam || !code) {
+    return clearOAuthState(redirectWithError('google_auth_failed'));
+  }
+
+  if (!state || !savedState || state !== savedState) {
+    return clearOAuthState(redirectWithError('invalid_state'));
   }
 
   const oauth2Client = getOAuth2Client();
@@ -30,52 +54,70 @@ export async function GET(req: NextRequest) {
     const { data: profile } = await oauth2.userinfo.get();
 
     if (!profile.email) {
-      return NextResponse.redirect(`${origin}/auth/login?error=no_email`);
+      return clearOAuthState(redirectWithError('no_email'));
     }
 
     const db = createSupabaseAdminClient();
     const email = profile.email.toLowerCase();
-    const providerId = profile.id!;
+    const providerId: string = (profile.sub ?? profile.id ?? '') as string;
 
-    // 기존 유저 조회 (Google provider_id 또는 이메일로)
-    let { data: user } = await db
-      .from('users')
-      .select('id, email')
-      .eq('provider', 'google')
-      .eq('provider_id', providerId)
-      .single();
+    let user: AuthUser | null = null;
+
+    if (providerId) {
+      const { data, error: lookupErr } = await db
+        .from('users')
+        .select('id, email, status')
+        .eq('provider', 'google')
+        .eq('provider_id', providerId)
+        .maybeSingle();
+
+      if (lookupErr) {
+        console.error('[google/callback] provider_id lookup error:', lookupErr);
+      }
+      user = data;
+    }
 
     if (!user) {
-      // 같은 이메일로 가입된 계정이 있는지 확인
-      const { data: existingByEmail } = await db
+      const { data: existingByEmail, error: emailLookupErr } = await db
         .from('users')
-        .select('id, email, provider')
+        .select('id, email, status')
         .eq('email', email)
-        .single();
+        .maybeSingle();
+
+      if (emailLookupErr) {
+        console.error('[google/callback] email lookup error:', emailLookupErr);
+      }
 
       if (existingByEmail) {
-        // 기존 이메일 계정을 Google 계정으로 연결
-        await db.from('users').update({ provider: 'google', provider_id: providerId }).eq('id', existingByEmail.id);
-        user = { id: existingByEmail.id, email: existingByEmail.email };
+        const { error: updateErr } = await db
+          .from('users')
+          .update({ provider: 'google', provider_id: providerId || null })
+          .eq('id', existingByEmail.id);
+
+        if (updateErr) {
+          console.error('[google/callback] provider update error:', updateErr);
+          return clearOAuthState(redirectWithError('signup_failed'));
+        }
+
+        user = existingByEmail;
       } else {
-        // 신규 유저 생성
         const { data: newUser, error: insertErr } = await db
           .from('users')
           .insert({
             email,
             provider: 'google',
-            provider_id: providerId,
+            provider_id: providerId || null,
             status: 'active',
           })
-          .select('id, email')
+          .select('id, email, status')
           .single();
 
         if (insertErr || !newUser) {
-          return NextResponse.redirect(`${origin}/auth/login?error=signup_failed`);
+          console.error('[google/callback] insert error:', JSON.stringify(insertErr));
+          return clearOAuthState(redirectWithError('signup_failed'));
         }
 
-        // 기본 이메일 채널 등록
-        await db.from('notification_channels').insert({
+        const { error: channelErr } = await db.from('notification_channels').insert({
           user_id: newUser.id,
           type: 'email',
           destination: email,
@@ -83,18 +125,27 @@ export async function GET(req: NextRequest) {
           is_active: true,
         });
 
+        if (channelErr) {
+          console.error('[google/callback] notification_channels insert error:', channelErr);
+        }
+
         user = newUser;
       }
     }
 
-    // JWT 발급
+    if (user.status === 'inactive') {
+      return clearOAuthState(redirectWithError('account_inactive'));
+    }
+
     const token = await signToken({ sub: user.id, email: user.email });
     const cookie = sessionCookieOptions(token);
 
-    const res = NextResponse.redirect(`${origin}/settings`);
+    const res = NextResponse.redirect(`${BASE_URL}/settings`);
     res.cookies.set(cookie);
+    res.cookies.set(deleteOAuthStateCookieOptions());
     return res;
-  } catch {
-    return NextResponse.redirect(`${origin}/auth/login?error=google_auth_failed`);
+  } catch (err) {
+    console.error('[google/callback] unexpected error:', err);
+    return clearOAuthState(redirectWithError('google_auth_failed'));
   }
 }

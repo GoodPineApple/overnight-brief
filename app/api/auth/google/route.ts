@@ -1,5 +1,7 @@
+import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
+import { oauthStateCookieOptions } from '@/lib/auth';
 
 function getOAuth2Client() {
   return new google.auth.OAuth2(
@@ -11,12 +13,16 @@ function getOAuth2Client() {
 
 export async function GET() {
   const oauth2Client = getOAuth2Client();
+  const state = randomUUID();
 
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: ['openid', 'email', 'profile'],
     prompt: 'select_account',
+    state,
   });
 
-  return NextResponse.redirect(authUrl);
+  const res = NextResponse.redirect(authUrl);
+  res.cookies.set(oauthStateCookieOptions(state));
+  return res;
 }

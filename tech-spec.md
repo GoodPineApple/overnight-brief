@@ -14,7 +14,7 @@
 | **DB** | Supabase (PostgreSQL) | 오픈소스, Auth·Storage 내장, 무료 티어 |
 | **인증** | 이메일+비밀번호 (bcryptjs + jose JWT) + Google OAuth 2.0 직접 구현 | Supabase Auth 미사용, 자체 세션 쿠키 관리 |
 | **스케줄러** | GitHub Actions (cron) | 별도 서버 없이 무료로 새벽 배치 실행 |
-| **뉴스 수집** | NewsAPI.org + Cheerio | API로 주요 외신 수집, Cheerio로 보조 크롤링 |
+| **뉴스 수집** | Playwright + Google News (화이트리스트) | 10개 신뢰 언론사 `site:` 필터 + 2차 필터, NewsAPI 미사용 |
 | **AI 요약** | OpenAI API (GPT-4o mini) | 가성비 최적, 한국어 요약 품질 우수 |
 | **이메일 발송** | Gmail API + Nodemailer | 직접 구현, 외부 서비스 의존 없음, 500건/일 무료 |
 | **배포** | Vercel | Next.js 네이티브, 무료 플랜으로 시작 |
@@ -109,9 +109,10 @@ raw_news → (AI 필터링·요약) → newsletter_items → (채널별 발송) 
 ```
 [GitHub Actions Cron - 새벽 2시 KST]
   → scripts/collect-news.ts
-    ├── NewsAPI.org 호출 (top headlines, technology category)
-    ├── Cheerio로 보조 사이트 스크래핑 (필요 시)
-    └── Supabase raw_news 테이블에 저장
+    ├── Supabase에서 active 유저 keywords 조회 (중복 제거)
+    ├── 키워드별 fetchGoogleNewsByKeyword() — Playwright + site: OR 쿼리
+    ├── isTrustedArticle() 2차 화이트리스트 필터 (10개 언론사)
+    └── Supabase raw_news 테이블에 upsert (url 기준 dedupe)
 
 [GitHub Actions Cron - 새벽 4시 KST]
   → scripts/process-ai.ts
@@ -274,9 +275,6 @@ GOOGLE_CLIENT_SECRET=
 # OpenAI
 OPENAI_API_KEY=
 
-# NewsAPI
-NEWS_API_KEY=
-
 # Gmail API (OAuth2)
 GMAIL_USER=                       # 발신 Gmail 주소 (예: yourname@gmail.com)
 GMAIL_CLIENT_ID=
@@ -313,10 +311,11 @@ jobs:
         with:
           node-version: '20'
       - run: npm ci
-      - run: npx ts-node scripts/collect-news.ts
+      - run: npx playwright install chromium --with-deps
+      - run: npm run collect
         env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
 
   process:
     if: github.event.schedule == '0 19 * * *'
@@ -696,7 +695,7 @@ Human-in-the-loop 검토 화면. 오늘 오전 8시 발송 예정 아이템을 �
 
 | 서비스 | 용도 | 무료 한도 |
 |--------|------|-----------|
-| **NewsAPI.org** | 글로벌 뉴스 수집 | 100 req/일 (Developer) |
+| **Google News (Playwright)** | 키워드별 화이트리스트 뉴스 수집 | 무료 (CAPTCHA 리스크) |
 | **OpenAI** | GPT-4o mini 요약 | 종량제 (매우 저렴) |
 | **Gmail API** | 이메일 발송 | 500건/일 (일반 Gmail) |
 | **Supabase** | DB + Auth | 500MB DB, 무료 티어 |
@@ -711,12 +710,12 @@ Human-in-the-loop 검토 화면. 오늘 오전 8시 발송 예정 아이템을 �
 - [ ] Next.js 프로젝트 초기화 (`npx create-next-app@latest`)
 - [ ] JWT_SECRET 생성 + 이메일+비밀번호 인증 구현 (bcryptjs + jose)
 - [ ] Google OAuth 2.0 클라이언트 발급 + `/api/auth/callback` 직접 구현
-- [ ] NewsAPI 키 발급 + 수집 스크립트 로컬 테스트
+- [ ] Google News 화이트리스트 크롤링 로컬 테스트 (`npm run test:crawl`)
 - [ ] Gmail API OAuth2 설정 + Refresh Token 발급
 - [ ] GitHub Actions 워크플로우 기본 설정 + Secrets 등록
 
 ### 2주차 — 백엔드 파이프라인
-- [ ] `collect-news.ts` 완성 (NewsAPI + 보조 크롤링)
+- [ ] `collect-news.ts` 완성 (Playwright + TRUSTED_SOURCES 화이트리스트)
 - [ ] `process-ai.ts` 완성 (키워드 필터링 + GPT 요약 프롬프트 최적화)
 - [ ] `lib/mailer.ts` 완성 (Gmail API OAuth2 발송 함수)
 - [ ] `lib/notifier.ts` 완성 (Slack·Discord 웹훅 발송 함수)
@@ -750,7 +749,6 @@ Human-in-the-loop 검토 화면. 오늘 오전 8시 발송 예정 아이템을 �
 | Supabase Free | $0 |
 | Gmail API | $0 (무료) |
 | OpenAI GPT-4o mini (100명 × 30일 × ~1,000 tokens) | ~$1~3 |
-| NewsAPI Developer | $0 (100 req/일) |
 | **합계** | **~$1~3/월** |
 
 ---

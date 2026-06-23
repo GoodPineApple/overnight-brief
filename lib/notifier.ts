@@ -1,5 +1,6 @@
 // Slack·Discord 웹훅 발송 함수
-// HTML을 마크다운/플레인 텍스트로 단순화해서 전송
+
+import type { NewsletterBrief } from './newsletter';
 
 type WebhookPayload = {
   title: string;
@@ -18,7 +19,6 @@ export async function sendSlack(webhookUrl: string, payload: WebhookPayload) {
 }
 
 export async function sendDiscord(webhookUrl: string, payload: WebhookPayload) {
-  // Discord 메시지 최대 2000자 제한
   const content = `**${payload.title}**\n\n${payload.text}`.slice(0, 1900);
   const res = await fetch(webhookUrl, {
     method: 'POST',
@@ -28,7 +28,27 @@ export async function sendDiscord(webhookUrl: string, payload: WebhookPayload) {
   if (!res.ok) throw new Error(`Discord webhook ${res.status}: ${await res.text()}`);
 }
 
-// 발송 큐 아이템을 텍스트 형식으로 변환
+/** NewsletterBrief → Slack/Discord plain text */
+export function briefToPlainText(brief: NewsletterBrief): string {
+  let itemNum = 0;
+
+  const sections = brief.sections.map((section) => {
+    const items = section.items
+      .map((item) => {
+        itemNum += 1;
+        const lines = item.summary_ko.split('\n').filter(Boolean).join('\n');
+        return `${itemNum}. [${section.keyword}] ${item.title}\n${lines}\n${item.url}`;
+      })
+      .join('\n\n');
+
+    return `## #${section.keyword}\n\n${items}`;
+  });
+
+  const header = `오늘 ${brief.total_items}건 · 키워드 ${brief.sections.length}개\n`;
+  return header + sections.join('\n\n');
+}
+
+/** @deprecated briefToPlainText 사용 */
 export function itemsToPlainText(
   items: { matched_keyword: string | null; summary_ko: string; raw_url?: string | null }[],
 ): string {

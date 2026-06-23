@@ -8,6 +8,7 @@
 
 ```bash
 npm install
+npx playwright install chromium   # 뉴스 수집(collect)에 필요
 cp .env.example .env.local   # 값 채우기
 npm run dev
 ```
@@ -19,19 +20,21 @@ http://localhost:3000 에서 확인.
 1. **Supabase**: 새 프로젝트 생성 → SQL 에디터에서 `supabase/migrations/` 아래 SQL을 **0001 → 0002 → 0003 → 0004** 순서로 실행 → URL과 키를 `.env.local`에 입력.
 2. **Google OAuth (구글 로그인)**: Google Cloud Console에서 OAuth 2.0 클라이언트 생성 → `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 발급. 승인된 리디렉션 URI에 `http://localhost:3000/api/auth/callback` 추가.
 3. **JWT_SECRET**: `openssl rand -base64 32` 명령으로 임의의 강한 문자열 생성 후 `.env.local`에 입력.
-4. **NewsAPI**: https://newsapi.org 에서 키 발급.
-5. **OpenAI**: API 키 발급.
-6. **Gmail API**: Google Cloud Console에서 OAuth2 클라이언트 발급 → OAuth Playground로 Refresh Token 획득.
-7. **ADMIN_SECRET**: 임의의 강한 문자열 지정. 어드민 진입 시 브라우저 콘솔에서 `document.cookie = "admin_token=<값>; path=/"` 입력.
+4. **OpenAI**: API 키 발급.
+5. **Gmail API**: Google Cloud Console에서 OAuth2 클라이언트 발급 → OAuth Playground로 Refresh Token 획득.
+6. **ADMIN_SECRET**: 임의의 강한 문자열 지정. 어드민 진입 시 브라우저 콘솔에서 `document.cookie = "admin_token=<값>; path=/"` 입력.
+
+뉴스 수집은 NewsAPI 없이 **Google News Playwright 크롤링 + 10개 신뢰 언론사 화이트리스트**(`lib/news-sources.ts`)로 동작합니다. 로컬 테스트: `npm run test:crawl`.
 
 ## 명령어
 
 ```bash
 npm run dev       # 개발 서버
 npm run build     # 프로덕션 빌드
-npm run collect   # 뉴스 수집 (수동 실행)
-npm run process   # AI 요약 (수동 실행)
-npm run send      # 이메일 발송 (수동 실행)
+npm run collect     # 뉴스 수집 (Playwright, 화이트리스트)
+npm run test:crawl  # 크롤링 테스트 (기본 키워드 OpenAI)
+npm run process     # AI 요약 (수동 실행)
+npm run send        # 이메일 발송 (수동 실행)
 ```
 
 ## 배포 (Vercel + GitHub)
@@ -57,7 +60,6 @@ SUPABASE_SERVICE_ROLE_KEY
 JWT_SECRET
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
-NEWS_API_KEY
 OPENAI_API_KEY
 GMAIL_USER
 GMAIL_CLIENT_ID
@@ -97,6 +99,33 @@ GMAIL_REFRESH_TOKEN
 
 - 로그인 검증
 
-*
+* 회원가입 이메일 인증 로그인
+* 구글 소셜 로그인
+* 인증 이메일 발송 확인
 
 - 데이터베이스 연동
+
+* supabase 재기동
+* 권한 문제 해결
+
+### 20260623
+
+- 사용자별 키워드 저장하기
+- 뉴스데이터 수집 정책 결정
+
+* 뉴스 목록은 Google News의 미국 기준 white list 10개 언론사의 뉴스 정보 수집
+* 각 언론사의 웹사이트를 파싱하여 데이터 누적
+
+- 뉴스레터 요약 정책 결정
+
+* 원본 뉴스정보에서 섹션 및 요약 정보 노출
+
+- 뉴스 목록 수집
+- 뉴스레터 요약 생성 초안 개발
+
+### 다음에 할일
+
+- 뉴스 상세 원본 데이터 수집
+- 수집된 뉴스를 가공하기 (AI연동)
+- 뉴스레터 만들기
+- 사용자에게 뉴스레터 발송하기

@@ -8,8 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "collect": "tsx scripts/collect-news.ts",
+    "test:crawl": "tsx scripts/test-google-news-crawl.ts",
+    "test:article": "tsx scripts/test-article-crawl.ts",
     "process": "tsx scripts/process-ai.ts",
-    "send": "tsx scripts/send-emails.ts"
+    "send": "tsx scripts/send-emails.ts",
+    "test:seed": "tsx scripts/seed-test-data.ts",
+    "test:seed:mock": "tsx scripts/seed-test-data.ts --mock-items",
+    "test:preview": "tsx scripts/preview-newsletter.ts",
+    "test:reset": "tsx scripts/reset-test-data.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.2",
@@ -20,6 +26,7 @@
     "next": "16.2.6",
     "nodemailer": "^8.0.8",
     "openai": "^6.39.0",
+    "playwright": "^1.61.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },

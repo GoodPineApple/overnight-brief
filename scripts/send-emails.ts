@@ -1,9 +1,10 @@
 // 오전 8시 KST 실행 — newsletter_items → 채널별 발송 → briefing_logs 기록
-import 'dotenv/config';
+import '../lib/load-env';
 import { createClient } from '@supabase/supabase-js';
 import { sendEmail } from '../lib/mailer';
-import { sendSlack, sendDiscord, itemsToPlainText } from '../lib/notifier';
+import { sendSlack, sendDiscord, briefToPlainText } from '../lib/notifier';
 import { renderNewsletterHtml } from '../lib/email-template';
+import { composeNewsletterBrief } from '../lib/newsletter';
 
 function todayKstDate(): string {
   const now = new Date();
@@ -21,16 +22,14 @@ async function main() {
   const briefingDate = todayKstDate();
   console.log(`[send-emails] 발송 날짜: ${briefingDate}`);
 
-  // 1. 발송 큐 로드 (유저별 그룹화)
   const { data: items, error } = await supabase
     .from('newsletter_items')
     .select(
       `id, user_id, matched_keyword, summary_ko, importance_rank,
        raw_news:raw_news_id(title, url, source),
-       users:user_id(id, email, status, notification_channels(id, type, destination, is_active))`,
+       users:user_id(id, email, status, keywords(keyword, created_at), notification_channels(id, type, destination, is_active))`,
     )
-    .eq('briefing_date', briefingDate)
-    .order('importance_rank', { ascending: true });
+    .eq('briefing_date', briefingDate);
 
   if (error) {
     console.error('[send-emails] 큐 로드 실패:', error);
@@ -41,7 +40,6 @@ async function main() {
     return;
   }
 
-  // 2. 유저별로 그룹화
   type ItemRow = (typeof items)[number];
   const byUser = new Map<string, ItemRow[]>();
   for (const item of items) {
@@ -51,12 +49,12 @@ async function main() {
 
   console.log(`[send-emails] 발송 대상 유저: ${byUser.size}명`);
 
-  // 3. 유저별 채널별 발송
   for (const [userId, userItems] of byUser) {
     const userRow = userItems[0].users as unknown as {
       id: string;
       email: string;
       status: string;
+      keywords: { keyword: string; created_at: string }[];
       notification_channels: { id: string; type: string; destination: string; is_active: boolean }[];
     } | null;
 
@@ -68,22 +66,33 @@ async function main() {
       continue;
     }
 
-    const subject = `[Overnight Brief] ${briefingDate} 오늘의 글로벌 테크 브리핑`;
-    const html = renderNewsletterHtml(
+    const keywordOrder = (userRow.keywords ?? [])
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+      .map((k) => k.keyword);
+
+    const brief = composeNewsletterBrief(
       userItems.map((it) => ({
         matched_keyword: it.matched_keyword,
         summary_ko: it.summary_ko,
-        raw_news: it.raw_news as unknown as { title: string | null; url: string; source: string | null } | null,
+        importance_rank: it.importance_rank,
+        raw_news: it.raw_news as unknown as {
+          title: string | null;
+          url: string;
+          source: string | null;
+        } | null,
       })),
       briefingDate,
+      keywordOrder,
     );
-    const plainText = itemsToPlainText(
-      userItems.map((it) => ({
-        matched_keyword: it.matched_keyword,
-        summary_ko: it.summary_ko,
-        raw_url: (it.raw_news as unknown as { url: string } | null)?.url,
-      })),
-    );
+
+    if (brief.total_items === 0) {
+      console.log(`[send-emails] ${userRow.email}: 조립 결과 0건. 건너뜀.`);
+      continue;
+    }
+
+    const subject = `[Overnight Brief] ${briefingDate} 오늘의 글로벌 테크 브리핑`;
+    const html = renderNewsletterHtml(brief);
+    const plainText = briefToPlainText(brief);
 
     for (const channel of channels) {
       try {

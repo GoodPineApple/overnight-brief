@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { requireSupabaseEnv } from '../../lib/require-env';
 
 export function todayKstDate(): string {
   const now = new Date();
@@ -6,16 +7,7 @@ export function todayKstDate(): string {
   return kst.toISOString().slice(0, 10);
 }
 
-export function requireSupabaseEnv(): void {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) {
-    console.error('[test] NEXT_PUBLIC_SUPABASE_URL가 설정되지 않았습니다.');
-    process.exit(1);
-  }
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
-    console.error('[test] SUPABASE_SERVICE_ROLE_KEY가 설정되지 않았습니다.');
-    process.exit(1);
-  }
-}
+export { requireSupabaseEnv };
 
 export function createTestSupabase() {
   requireSupabaseEnv();

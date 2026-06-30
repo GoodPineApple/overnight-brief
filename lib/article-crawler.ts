@@ -23,7 +23,12 @@ export type EnrichedArticle = {
 export type EnrichArticlesOptions = {
   userAgent?: string;
   articleDelayMs?: number;
+  /** 목록에서 시도할 최대 기사 수 (미설정 시 전체) */
   maxArticles?: number;
+  /** enrich 성공 목표 건수 — 도달 시 조기 종료 */
+  targetSuccessCount?: number;
+  /** 이미 수집된 publisher URL — 목표 카운트·저장 대상에서 제외 */
+  excludeUrls?: Set<string>;
   minBodyChars?: number;
   onProgress?: (info: {
     index: number;
@@ -350,11 +355,15 @@ export async function enrichArticlesWithBody(
   articles: GoogleNewsArticle[],
   browser: Browser,
   options?: EnrichArticlesOptions,
-): Promise<{ enriched: EnrichedArticle[]; stats: { ok: number; skip: number; fail: number } }> {
+): Promise<{
+  enriched: EnrichedArticle[];
+  stats: { ok: number; skip: number; fail: number; duplicate: number };
+}> {
   const userAgent = options?.userAgent ?? DEFAULT_USER_AGENT;
   const articleDelayMs = options?.articleDelayMs ?? ARTICLE_DELAY_MS;
   const minBodyChars = options?.minBodyChars ?? MIN_BODY_CHARS;
   const maxArticles = options?.maxArticles ?? articles.length;
+  const targetSuccessCount = options?.targetSuccessCount;
   const slice = articles.slice(0, maxArticles);
 
   const context = await browser.newContext({ userAgent });
@@ -364,9 +373,15 @@ export async function enrichArticlesWithBody(
   let ok = 0;
   let skip = 0;
   let fail = 0;
+  let duplicate = 0;
+  const excludeUrls = options?.excludeUrls;
 
   try {
     for (let i = 0; i < slice.length; i++) {
+      if (targetSuccessCount !== undefined && ok >= targetSuccessCount) {
+        break;
+      }
+
       const article = slice[i];
       const progress = {
         index: i + 1,
@@ -405,10 +420,19 @@ export async function enrichArticlesWithBody(
           continue;
         }
 
+        const normalizedUrl = normalizeUrl(publisherUrl);
+        if (excludeUrls?.has(normalizedUrl)) {
+          duplicate++;
+          progress.status = 'skip';
+          progress.reason = '이미 수집된 URL (키워드 간 중복)';
+          options?.onProgress?.(progress);
+          continue;
+        }
+
         enriched.push({
           source: article.source,
           title: article.title,
-          url: publisherUrl,
+          url: normalizedUrl,
           content: body.content,
           published_at: article.publishedAt,
         });
@@ -429,5 +453,5 @@ export async function enrichArticlesWithBody(
     await context.close();
   }
 
-  return { enriched, stats: { ok, skip, fail } };
+  return { enriched, stats: { ok, skip, fail, duplicate } };
 }

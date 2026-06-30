@@ -34,6 +34,24 @@ export type NewsletterItem = {
   created_at: string;
 };
 
+export type NewsletterSection = {
+  id: string;
+  user_id: string;
+  matched_keyword: string;
+  insight_ko: string;
+  briefing_date: string;
+  created_at: string;
+};
+
+export type KeywordRawNews = {
+  id: string;
+  keyword: string;
+  raw_news_id: string;
+  collection_date: string;
+  rank_in_batch: number;
+  created_at: string;
+};
+
 export type ChannelType = 'email' | 'slack' | 'discord';
 
 export type NotificationChannel = {

@@ -1,30 +1,77 @@
-// 새벽 4시 KST 실행 — 유저 키워드로 필터링 → GPT 요약 → newsletter_items 저장
+// 새벽 4시 KST — 키워드별 수집 뉴스 → GPT 인사이트+기사별 3줄 요약 → newsletter 저장
 import '../lib/load-env';
 import { createClient } from '@supabase/supabase-js';
+import { todayKstDate } from '../lib/kst-date';
 import {
   buildNewsletterRows,
-  filterAndRankNews,
+  sliceCollectedNews,
   type RawNewsCandidate,
 } from '../lib/news-processor';
 
 function requireOpenAiKey(): void {
   if (!process.env.OPENAI_API_KEY?.trim()) {
     console.error(
-      '[process-ai] OPENAI_API_KEY가 설정되지 않았습니다. .env.local 또는 GitHub Actions secret을 확인하세요.',
+      '[process-ai] OPENAI_API_KEY가 설정되지 않았습니다. .env 또는 GitHub Actions secret을 확인하세요.',
     );
     process.exit(1);
   }
 }
 
-function todayKstDate(): string {
-  const now = new Date();
-  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  return kst.toISOString().slice(0, 10);
+async function loadCollectedByKeyword(
+  supabase: ReturnType<typeof createClient>,
+  collectionDate: string,
+): Promise<Map<string, RawNewsCandidate[]>> {
+  const { data, error } = await supabase
+    .from('keyword_raw_news')
+    .select(
+      `keyword, rank_in_batch,
+       raw_news:raw_news_id(id, title, url, content, source, published_at)`,
+    )
+    .eq('collection_date', collectionDate)
+    .order('rank_in_batch', { ascending: true });
+
+  if (error) throw error;
+
+  type LinkRow = {
+    keyword: string;
+    rank_in_batch: number;
+    raw_news: {
+      id: string;
+      title: string | null;
+      url: string;
+      content: string | null;
+      source: string | null;
+      published_at: string | null;
+    } | null;
+  };
+
+  const byKeyword = new Map<string, RawNewsCandidate[]>();
+
+  for (const row of (data ?? []) as LinkRow[]) {
+    const raw = row.raw_news;
+
+    if (!raw?.id) continue;
+
+    const candidate: RawNewsCandidate = {
+      id: raw.id,
+      title: raw.title ?? '',
+      content: raw.content ?? '',
+      url: raw.url,
+      source: raw.source,
+      published_at: raw.published_at,
+      rank_in_batch: row.rank_in_batch,
+    };
+
+    if (!byKeyword.has(row.keyword)) byKeyword.set(row.keyword, []);
+    byKeyword.get(row.keyword)!.push(candidate);
+  }
+
+  return byKeyword;
 }
 
 async function main() {
   requireOpenAiKey();
-  const { summarizeArticles } = await import('../lib/openai');
+  const { summarizeKeywordNewsletter } = await import('../lib/openai');
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -34,6 +81,20 @@ async function main() {
 
   const briefingDate = todayKstDate();
   console.log(`[process-ai] 브리핑 날짜: ${briefingDate}`);
+
+  const collectedByKeyword = await loadCollectedByKeyword(supabase, briefingDate);
+
+  if (!collectedByKeyword.size) {
+    console.log(
+      `[process-ai] ${briefingDate} keyword_raw_news 없음. collect 먼저 실행하세요.`,
+    );
+    return;
+  }
+
+  const totalCollected = [...collectedByKeyword.values()].reduce((s, a) => s + a.length, 0);
+  console.log(
+    `[process-ai] 수집 키워드 ${collectedByKeyword.size}개, 고유 수집 매핑 ${totalCollected}건`,
+  );
 
   const { data: users, error: usersError } = await supabase
     .from('users')
@@ -50,33 +111,6 @@ async function main() {
     return;
   }
 
-  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { data: news, error: newsError } = await supabase
-    .from('raw_news')
-    .select('id, title, url, content, source, published_at')
-    .gte('collected_at', cutoff);
-
-  if (newsError) {
-    console.error('[process-ai] raw_news 로드 실패:', newsError);
-    process.exit(1);
-  }
-
-  if (!news?.length) {
-    console.log('[process-ai] 최근 24시간 수집 뉴스 없음. 종료.');
-    return;
-  }
-
-  const candidates: RawNewsCandidate[] = news.map((n) => ({
-    id: n.id,
-    title: n.title ?? '',
-    content: n.content ?? '',
-    url: n.url,
-    source: n.source,
-    published_at: n.published_at,
-  }));
-
-  console.log(`[process-ai] 활성 유저 ${users.length}명, 후보 뉴스 ${candidates.length}건`);
-
   for (const user of users) {
     const keywords = (user.keywords ?? []) as {
       id: string;
@@ -90,57 +124,62 @@ async function main() {
 
     if (!keywords.length) continue;
 
-    const usedNewsIds = new Set<string>();
-
     try {
-      const { error: deleteError } = await supabase
-        .from('newsletter_items')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('briefing_date', briefingDate);
-
-      if (deleteError) {
-        console.error(`[process-ai] 기존 아이템 삭제 실패 (${user.email}):`, deleteError);
-        continue;
-      }
+      await supabase.from('newsletter_items').delete().eq('user_id', user.id).eq('briefing_date', briefingDate);
+      await supabase.from('newsletter_sections').delete().eq('user_id', user.id).eq('briefing_date', briefingDate);
 
       for (const kw of keywords) {
-        const limit = Math.max(1, Math.min(20, kw.news_count ?? 10));
-        const matched = filterAndRankNews(candidates, kw.keyword, limit, usedNewsIds);
+        const pool = collectedByKeyword.get(kw.keyword) ?? [];
+        const articles = sliceCollectedNews(pool, kw.news_count);
 
-        if (!matched.length) {
-          console.log(`[process-ai] user=${user.email} keyword=${kw.keyword} 매칭 0건`);
+        if (!articles.length) {
+          console.log(
+            `[process-ai] user=${user.email} keyword="${kw.keyword}" 수집 0건 (news_count=${kw.news_count})`,
+          );
           continue;
         }
 
         console.log(
-          `[process-ai] user=${user.email} keyword=${kw.keyword} 후보=${matched.length}건`,
+          `[process-ai] user=${user.email} keyword="${kw.keyword}" 수집 ${articles.length}건 → GPT`,
         );
 
         try {
-          const summaries = await summarizeArticles({
+          const result = await summarizeKeywordNewsletter({
             keyword: kw.keyword,
-            articles: matched.map((c) => ({
+            articles: articles.map((c) => ({
               title: c.title,
               url: c.url,
               content: c.content,
             })),
           });
 
-          const items = buildNewsletterRows(user.id, kw.keyword, matched, summaries, briefingDate);
+          const { error: sectionError } = await supabase.from('newsletter_sections').insert({
+            user_id: user.id,
+            matched_keyword: kw.keyword,
+            insight_ko: result.insight_ko,
+            briefing_date: briefingDate,
+          });
 
-          if (!items.length) {
-            console.log(`[process-ai]   → GPT 유효 결과 0건 (${kw.keyword})`);
+          if (sectionError) {
+            console.error(`[process-ai] section insert 실패 (${user.email}/${kw.keyword}):`, sectionError);
             continue;
           }
 
-          for (const item of items) usedNewsIds.add(item.raw_news_id);
+          const items = buildNewsletterRows(
+            user.id,
+            kw.keyword,
+            articles,
+            result.items,
+            briefingDate,
+          );
 
-          const { error: insertError } = await supabase.from('newsletter_items').insert(items);
-          if (insertError) {
-            console.error(`[process-ai] insert 실패 (${user.email}/${kw.keyword}):`, insertError);
-          } else {
-            console.log(`[process-ai]   → ${items.length}건 저장`);
+          if (items.length) {
+            const { error: insertError } = await supabase.from('newsletter_items').insert(items);
+            if (insertError) {
+              console.error(`[process-ai] items insert 실패 (${user.email}/${kw.keyword}):`, insertError);
+            } else {
+              console.log(`[process-ai]   → 인사이트 1 + 기사 ${items.length}건 저장`);
+            }
           }
         } catch (err) {
           console.error(`[process-ai] GPT 실패 (${user.email}/${kw.keyword}):`, err);

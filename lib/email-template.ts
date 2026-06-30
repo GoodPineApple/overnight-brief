@@ -6,6 +6,16 @@ export function renderNewsletterHtml(brief: NewsletterBrief): string {
 
   const sectionsHtml = sections
     .map((section) => {
+      const insightLines = section.insight_ko.split('\n').filter(Boolean);
+      const insightHtml = `
+        <div style="background: #eff6ff; border-radius: 8px; padding: 14px 16px; margin-bottom: 20px;">
+          <div style="font-size: 12px; font-weight: 600; color: #1d4ed8; margin-bottom: 8px;">오늘의 인사이트</div>
+          <ul style="margin: 0 0 0 18px; padding: 0; color: #1e3a5f; line-height: 1.6;">
+            ${insightLines.map((l) => `<li>${escapeHtml(l)}</li>`).join('')}
+          </ul>
+        </div>
+      `;
+
       const itemsHtml = section.items
         .map((item) => {
           const lines = item.summary_ko.split('\n').filter(Boolean);
@@ -31,6 +41,7 @@ export function renderNewsletterHtml(brief: NewsletterBrief): string {
         <h2 style="font-size: 18px; font-weight: 700; color: #111827; margin: 0 0 16px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
           #${escapeHtml(section.keyword)}
         </h2>
+        ${insightHtml}
         ${itemsHtml}
       </section>
     `;

@@ -1,10 +1,5 @@
 /**
- * 테스트용 raw_news + 유저/키워드 시드
- *
- * Usage:
- *   npm run test:seed
- *   npm run test:seed:mock          # OpenAI 없이 mock newsletter_items까지 생성
- *   npm run test:seed -- --email=you@gmail.com
+ * 테스트용 raw_news + keyword_raw_news + 유저/키워드 시드
  */
 import '../lib/load-env';
 import {
@@ -15,15 +10,12 @@ import {
 } from './fixtures/test-raw-news';
 import {
   buildNewsletterRows,
-  filterAndRankNews,
+  sliceCollectedNews,
   type RawNewsCandidate,
 } from '../lib/news-processor';
 import { validateSummaryKo } from '../lib/newsletter';
-import {
-  createTestSupabase,
-  parseArgs,
-  todayKstDate,
-} from './lib/test-supabase';
+import { todayKstDate } from '../lib/kst-date';
+import { createTestSupabase, parseArgs } from './lib/test-supabase';
 
 function mockSummary(title: string): string {
   return [
@@ -33,9 +25,16 @@ function mockSummary(title: string): string {
   ].join('\n');
 }
 
+function mockInsight(keyword: string): string {
+  return [
+    `${keyword} 키워드 수집 뉴스에서 드러난 첫 번째 종합 인사이트입니다.`,
+    '여러 기사를 관통하는 두 번째 트렌드 요약입니다.',
+    '한국 IT 종사자가 주목할 세 번째 시사점입니다.',
+  ].join('\n');
+}
+
 async function ensureTestUser(supabase: ReturnType<typeof createTestSupabase>, email: string) {
   const { data: existing } = await supabase.from('users').select('id, email').eq('email', email).maybeSingle();
-
   if (existing) return existing;
 
   const { data: created, error } = await supabase
@@ -45,16 +44,11 @@ async function ensureTestUser(supabase: ReturnType<typeof createTestSupabase>, e
     .single();
 
   if (error) throw new Error(`테스트 유저 생성 실패: ${error.message}`);
-  console.log(`[test:seed] 테스트 유저 생성: ${email}`);
   return created;
 }
 
-async function resetTestKeywords(
-  supabase: ReturnType<typeof createTestSupabase>,
-  userId: string,
-) {
+async function resetTestKeywords(supabase: ReturnType<typeof createTestSupabase>, userId: string) {
   await supabase.from('keywords').delete().eq('user_id', userId);
-
   const { error } = await supabase.from('keywords').insert(
     TEST_KEYWORDS.map((k) => ({
       user_id: userId,
@@ -62,36 +56,13 @@ async function resetTestKeywords(
       news_count: k.news_count,
     })),
   );
-
   if (error) throw new Error(`키워드 시드 실패: ${error.message}`);
 }
 
-async function ensureEmailChannel(
+async function seedRawNewsAndKeywordLinks(
   supabase: ReturnType<typeof createTestSupabase>,
-  userId: string,
-  email: string,
-) {
-  const { data: channels } = await supabase
-    .from('notification_channels')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('type', 'email')
-    .eq('destination', email);
-
-  if (channels?.length) return;
-
-  const { error } = await supabase.from('notification_channels').insert({
-    user_id: userId,
-    type: 'email',
-    destination: email,
-    label: '테스트',
-    is_active: true,
-  });
-
-  if (error) console.warn(`[test:seed] 이메일 채널 생성 스킵: ${error.message}`);
-}
-
-async function seedRawNews(supabase: ReturnType<typeof createTestSupabase>) {
+  collectionDate: string,
+): Promise<Map<string, RawNewsCandidate[]>> {
   const now = new Date().toISOString();
   const rows = TEST_RAW_NEWS.map((a) => ({
     source: a.source,
@@ -102,51 +73,76 @@ async function seedRawNews(supabase: ReturnType<typeof createTestSupabase>) {
     collected_at: now,
   }));
 
-  const { error } = await supabase.from('raw_news').upsert(rows, {
-    onConflict: 'url',
-    ignoreDuplicates: false,
-  });
-
+  const { error } = await supabase.from('raw_news').upsert(rows, { onConflict: 'url' });
   if (error) throw new Error(`raw_news 시드 실패: ${error.message}`);
 
-  const { data } = await supabase.from('raw_news').select('id, title, url, content, source, published_at').like('url', `${TEST_URL_PREFIX}%`);
+  const { data: saved } = await supabase
+    .from('raw_news')
+    .select('id, title, url, content, source, published_at')
+    .like('url', `${TEST_URL_PREFIX}%`);
 
-  return (data ?? []) as RawNewsCandidate[];
+  const byUrl = new Map((saved ?? []).map((r) => [r.url, r as RawNewsCandidate]));
+  const byKeyword = new Map<string, RawNewsCandidate[]>();
+
+  for (const kw of TEST_KEYWORDS) {
+    const matched = TEST_RAW_NEWS.filter((a) => a.matchKeywords.includes(kw.keyword))
+      .slice(0, kw.news_count)
+      .map((a) => byUrl.get(a.url))
+      .filter(Boolean) as RawNewsCandidate[];
+
+    const links = matched.map((article, index) => ({
+      keyword: kw.keyword,
+      raw_news_id: article.id,
+      collection_date: collectionDate,
+      rank_in_batch: index + 1,
+    }));
+
+    if (links.length) {
+      await supabase.from('keyword_raw_news').upsert(links, {
+        onConflict: 'keyword,raw_news_id,collection_date',
+      });
+    }
+
+    byKeyword.set(
+      kw.keyword,
+      matched.map((m, i) => ({ ...m, rank_in_batch: i + 1 })),
+    );
+  }
+
+  return byKeyword;
 }
 
-async function seedMockNewsletterItems(
+async function seedMockNewsletter(
   supabase: ReturnType<typeof createTestSupabase>,
   userId: string,
   briefingDate: string,
-  candidates: RawNewsCandidate[],
+  collectedByKeyword: Map<string, RawNewsCandidate[]>,
 ) {
-  const usedNewsIds = new Set<string>();
-
-  await supabase
-    .from('newsletter_items')
-    .delete()
-    .eq('user_id', userId)
-    .eq('briefing_date', briefingDate);
+  await supabase.from('newsletter_items').delete().eq('user_id', userId).eq('briefing_date', briefingDate);
+  await supabase.from('newsletter_sections').delete().eq('user_id', userId).eq('briefing_date', briefingDate);
 
   for (const kw of TEST_KEYWORDS) {
-    const matched = filterAndRankNews(candidates, kw.keyword, kw.news_count, usedNewsIds);
-    if (!matched.length) continue;
+    const pool = collectedByKeyword.get(kw.keyword) ?? [];
+    const articles = sliceCollectedNews(pool, kw.news_count);
+    if (!articles.length) continue;
 
-    const summaries = matched.map((article, index) => ({
+    const insight = mockInsight(kw.keyword);
+    if (!validateSummaryKo(insight)) throw new Error('mock insight 형식 오류');
+
+    await supabase.from('newsletter_sections').insert({
+      user_id: userId,
+      matched_keyword: kw.keyword,
+      insight_ko: insight,
+      briefing_date: briefingDate,
+    });
+
+    const summaries = articles.map((article, index) => ({
       raw_index: index,
       summary_ko: mockSummary(article.title),
       importance_rank: index + 1,
     }));
 
-    for (const s of summaries) {
-      if (!validateSummaryKo(s.summary_ko)) {
-        throw new Error('mock summary 형식 오류');
-      }
-    }
-
-    const items = buildNewsletterRows(userId, kw.keyword, matched, summaries, briefingDate);
-    for (const item of items) usedNewsIds.add(item.raw_news_id);
-
+    const items = buildNewsletterRows(userId, kw.keyword, articles, summaries, briefingDate);
     if (items.length) {
       const { error } = await supabase.from('newsletter_items').insert(items);
       if (error) throw new Error(`mock newsletter_items 실패: ${error.message}`);
@@ -154,46 +150,48 @@ async function seedMockNewsletterItems(
   }
 }
 
+async function ensureEmailChannel(supabase: ReturnType<typeof createTestSupabase>, userId: string, email: string) {
+  const { data: existing } = await supabase
+    .from('notification_channels')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('type', 'email')
+    .eq('destination', email)
+    .maybeSingle();
+
+  if (existing) return;
+
+  const { error } = await supabase.from('notification_channels').insert({
+    user_id: userId,
+    type: 'email',
+    destination: email,
+    label: '기본 이메일',
+    is_active: true,
+  });
+  if (error) throw new Error(`notification_channels 시드 실패: ${error.message}`);
+}
+
 async function main() {
   const { flags, email: emailArg } = parseArgs(process.argv.slice(2));
-
-  if (flags.has('help')) {
-    console.log(`
-Usage: npm run test:seed [-- --mock-items] [--email=you@gmail.com]
-
-  --mock-items   OpenAI 없이 mock summary로 newsletter_items까지 생성
-  --email=       테스트 유저 이메일 (기본: ${DEFAULT_TEST_USER_EMAIL})
-`);
-    return;
-  }
-
   const supabase = createTestSupabase();
   const email = emailArg ?? process.env.TEST_USER_EMAIL ?? DEFAULT_TEST_USER_EMAIL;
   const briefingDate = todayKstDate();
-
-  console.log(`[test:seed] 브리핑 날짜: ${briefingDate}`);
-  console.log(`[test:seed] 테스트 유저: ${email}`);
 
   const user = await ensureTestUser(supabase, email);
   await resetTestKeywords(supabase, user.id);
   await ensureEmailChannel(supabase, user.id, email);
 
-  const candidates = await seedRawNews(supabase);
-  console.log(`[test:seed] raw_news ${candidates.length}건 upsert (prefix: ${TEST_URL_PREFIX})`);
-  console.log(`[test:seed] 키워드: ${TEST_KEYWORDS.map((k) => k.keyword).join(', ')}`);
+  const collectedByKeyword = await seedRawNewsAndKeywordLinks(supabase, briefingDate);
+
+  const totalLinks = [...collectedByKeyword.values()].reduce((s, a) => s + a.length, 0);
+  console.log(`[test:seed] keyword_raw_news ${totalLinks}건 (${briefingDate})`);
 
   if (flags.has('mock-items')) {
-    await seedMockNewsletterItems(supabase, user.id, briefingDate, candidates);
-    console.log(`[test:seed] mock newsletter_items 생성 완료 (${briefingDate})`);
-    console.log('\n다음: npm run test:preview');
+    await seedMockNewsletter(supabase, user.id, briefingDate, collectedByKeyword);
+    console.log('[test:seed] mock newsletter_sections + items 생성');
   } else {
-    console.log('\n다음:');
-    console.log('  npm run process          # OPENAI_API_KEY 필요 — GPT 요약');
-    console.log('  npm run test:preview     # 가공 결과 HTML 미리보기');
-    console.log('\nOpenAI 없이 미리보기만: npm run test:seed:mock && npm run test:preview');
+    console.log('다음: npm run process');
   }
-
-  console.log(`\n어드민 큐: http://localhost:3000/admin/queue (admin_token 쿠키 필요)`);
 }
 
 main().catch((err) => {

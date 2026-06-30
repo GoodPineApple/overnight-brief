@@ -5,6 +5,7 @@ export type RawNewsCandidate = {
   url: string;
   source: string | null;
   published_at: string | null;
+  rank_in_batch?: number;
 };
 
 export type NewsletterInsertRow = {
@@ -16,55 +17,22 @@ export type NewsletterInsertRow = {
   briefing_date: string;
 };
 
-function matchesKeyword(text: string, keyword: string): boolean {
-  return text.toLowerCase().includes(keyword.toLowerCase());
-}
+export type NewsletterSectionInsertRow = {
+  user_id: string;
+  matched_keyword: string;
+  insight_ko: string;
+  briefing_date: string;
+};
 
-function relevanceScore(news: RawNewsCandidate, keyword: string): number {
-  const kw = keyword.toLowerCase();
-  const title = (news.title ?? '').toLowerCase();
-  const content = (news.content ?? '').toLowerCase();
-  let score = 0;
-  if (title.includes(kw)) score += 2;
-  if (content.includes(kw)) score += 1;
-  return score;
-}
-
-function normalizeTitle(title: string): string {
-  return title.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 60);
-}
-
-/** 키워드 substring 매칭 후 관련도·신선도 기준 상위 limit건 선별 */
-export function filterAndRankNews(
-  news: RawNewsCandidate[],
-  keyword: string,
-  limit: number,
-  excludeIds: Set<string> = new Set(),
+/** 유저 news_count만큼 수집 순서대로 자른다 (substring 매칭 없음) */
+export function sliceCollectedNews(
+  articles: RawNewsCandidate[],
+  newsCount: number,
 ): RawNewsCandidate[] {
-  const matched = news.filter(
-    (n) =>
-      !excludeIds.has(n.id) &&
-      (matchesKeyword(n.title ?? '', keyword) || matchesKeyword(n.content ?? '', keyword)),
-  );
-
-  const seenTitles = new Set<string>();
-  const deduped: RawNewsCandidate[] = [];
-
-  for (const item of matched.sort((a, b) => {
-    const scoreDiff = relevanceScore(b, keyword) - relevanceScore(a, keyword);
-    if (scoreDiff !== 0) return scoreDiff;
-    const aTime = a.published_at ? new Date(a.published_at).getTime() : 0;
-    const bTime = b.published_at ? new Date(b.published_at).getTime() : 0;
-    return bTime - aTime;
-  })) {
-    const key = normalizeTitle(item.title ?? '');
-    if (key && seenTitles.has(key)) continue;
-    if (key) seenTitles.add(key);
-    deduped.push(item);
-    if (deduped.length >= limit) break;
-  }
-
-  return deduped;
+  const limit = Math.max(1, Math.min(20, newsCount ?? 10));
+  return [...articles]
+    .sort((a, b) => (a.rank_in_batch ?? 999) - (b.rank_in_batch ?? 999))
+    .slice(0, limit);
 }
 
 export function buildNewsletterRows(

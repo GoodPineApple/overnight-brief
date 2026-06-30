@@ -29,14 +29,17 @@ This version has breaking changes — APIs, conventions, and file structure may 
 ### 3. collect-news 파이프라인
 
 ```
-[키워드] → Google News 목록 (fetchGoogleNewsByKeyword)
-         → publisher URL (decodeGoogleNewsUrl)
-         → 본문 (fetchArticleBody)
-         → raw_news upsert (onConflict: url, content 갱신)
+[키워드별 반복]
+  → Google News 목록 (fetchGoogleNewsByKeyword)
+  → 본문 enrich (keywords.news_count 건 성공 시 조기 종료)
+  → raw_news upsert (키워드 처리 직후 즉시 저장)
+  → 다음 키워드
 ```
 
-- 구현: [`scripts/collect-news.ts`](scripts/collect-news.ts)
-- 테스트: `npm run test:crawl` (목록), `npm run test:article -- OpenAI 3` (본문)
+- `keywords.news_count`(1~20): 키워드당 **DB에 저장할 enrich 성공 목표 건수**. 동일 키워드가 여러 유저에 있으면 **최대값** 사용.
+- Google News 목록(~99건) 전체를 enrich하지 않음 — 목표 건수만큼 성공하면 해당 키워드 enrich 중단.
+- 키워드 단위 즉시 upsert — 중간 장애 시 **이미 처리된 키워드 데이터는 DB에 유지**.
+- optional env: `COLLECT_MAX_ARTICLES` — 키워드당 enrich 목표 상한 (dev/CI용).
 
 ### 4. 화이트리스트 정책 (필수)
 

@@ -21,18 +21,25 @@ export type SummaryItem = {
   importance_rank: number;
 };
 
+export type KeywordNewsletterResult = {
+  insight_ko: string;
+  items: SummaryItem[];
+};
+
 const SYSTEM_PROMPT = `당신은 한국어 IT/테크 뉴스 큐레이터입니다.
-주어진 영문 뉴스 기사들을 한국어로 3줄 요약하고, 섹션 내 중요도 순위를 매기세요.
+키워드별로 수집된 뉴스 묶음을 분석해 (1) 섹션 종합 인사이트와 (2) 기사별 3줄 요약을 작성합니다.
 
 규칙:
-1. 각 기사의 summary_ko는 반드시 정확히 3줄 (줄바꿈 \\n으로 구분, 각 줄은 한 문장).
-2. 한국 IT 종사자 관점에서 importance_rank를 1(가장 중요)부터 연속으로 매김.
-3. 같은 사건의 중복 뉴스는 가장 정보량 많은 1개만 items에 포함.
-4. JSON 형식으로만 응답.`;
+1. insight_ko: 해당 키워드 수집 뉴스 전체를 관통하는 종합 인사이트. 정확히 3줄 (줄바꿈 \\n, 각 줄 1문장). 한국 IT 종사자 관점.
+2. items: 입력된 모든 기사를 빠짐없이 1건씩 포함 (raw_index 0..N-1 각각 1개).
+3. 각 item의 summary_ko: 해당 기사만 3줄 요약 (줄바꿈 \\n, 각 줄 1문장).
+4. importance_rank: 섹션 내 1(가장 중요)부터 연속.
+5. JSON 형식으로만 응답.`;
 
 const RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
+    insight_ko: { type: 'string' },
     items: {
       type: 'array',
       items: {
@@ -47,7 +54,7 @@ const RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ['items'],
+  required: ['insight_ko', 'items'],
   additionalProperties: false,
 } as const;
 
@@ -70,25 +77,38 @@ function validateSummaryItems(items: SummaryItem[], articleCount: number): Summa
   return valid.sort((a, b) => a.importance_rank - b.importance_rank);
 }
 
-function parseSummaryResponse(content: string, articleCount: number): SummaryItem[] {
+function parseKeywordNewsletterResponse(
+  content: string,
+  articleCount: number,
+): KeywordNewsletterResult | null {
   try {
-    const parsed = JSON.parse(content);
-    const items = (Array.isArray(parsed) ? parsed : parsed.items ?? []) as SummaryItem[];
-    return validateSummaryItems(items, articleCount);
+    const parsed = JSON.parse(content) as KeywordNewsletterResult;
+    if (!validateSummaryKo(parsed.insight_ko ?? '')) return null;
+
+    const items = validateSummaryItems(
+      (parsed.items ?? []) as SummaryItem[],
+      articleCount,
+    );
+
+    if (items.length !== articleCount) return null;
+
+    return { insight_ko: parsed.insight_ko, items };
   } catch {
-    return [];
+    return null;
   }
 }
 
-async function callSummarize(input: SummaryInput): Promise<SummaryItem[]> {
+async function callSummarizeKeywordNewsletter(
+  input: SummaryInput,
+): Promise<KeywordNewsletterResult | null> {
   const userPrompt = [
     `키워드: ${input.keyword}`,
-    `\n뉴스 목록:`,
+    `수집 기사 ${input.articles.length}건 (모두 items에 포함할 것):`,
     ...input.articles.map(
       (a, i) =>
         `[${i}] 제목: ${a.title}\nURL: ${a.url}\n본문: ${a.content?.slice(0, 1500) ?? ''}`,
     ),
-    `\n위 뉴스를 items 배열 JSON으로 응답하세요.`,
+    `\ninsight_ko(3줄) + items(기사별 3줄 summary_ko) JSON으로 응답하세요.`,
   ].join('\n');
 
   const response = await openai.chat.completions.create({
@@ -100,7 +120,7 @@ async function callSummarize(input: SummaryInput): Promise<SummaryItem[]> {
     response_format: {
       type: 'json_schema',
       json_schema: {
-        name: 'newsletter_summaries',
+        name: 'keyword_newsletter',
         strict: true,
         schema: RESPONSE_SCHEMA,
       },
@@ -108,24 +128,33 @@ async function callSummarize(input: SummaryInput): Promise<SummaryItem[]> {
     temperature: 0.3,
   });
 
-  const content = response.choices[0]?.message?.content ?? '{"items":[]}';
-  return parseSummaryResponse(content, input.articles.length);
+  const content = response.choices[0]?.message?.content ?? '{}';
+  return parseKeywordNewsletterResponse(content, input.articles.length);
 }
 
-export async function summarizeArticles(input: SummaryInput): Promise<SummaryItem[]> {
+export async function summarizeKeywordNewsletter(
+  input: SummaryInput,
+): Promise<KeywordNewsletterResult> {
   const maxAttempts = 3;
-  let lastResult: SummaryItem[] = [];
+  let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const result = await callSummarize(input);
-      lastResult = result;
-      if (result.length > 0) return result;
+      const result = await callSummarizeKeywordNewsletter(input);
+      if (result) return result;
+      lastError = new Error('GPT 응답 검증 실패 (insight 3줄 또는 기사별 요약 누락)');
     } catch (err) {
+      lastError = err;
       if (attempt === maxAttempts - 1) throw err;
     }
     await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
   }
 
-  return lastResult;
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/** @deprecated summarizeKeywordNewsletter 사용 */
+export async function summarizeArticles(input: SummaryInput): Promise<SummaryItem[]> {
+  const result = await summarizeKeywordNewsletter(input);
+  return result.items;
 }

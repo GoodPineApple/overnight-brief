@@ -22,8 +22,15 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
 
   try {
-    const { articles, filteredCount } = await fetchGoogleNewsByKeyword(keyword, { browser });
-    console.log(`[test-article-crawl] 목록 ${filteredCount}건 중 ${maxArticles}건 enrich\n`);
+    const { articles, filteredCount, webUrl } = await fetchGoogleNewsByKeyword(keyword, { browser });
+
+    console.log('[test-article-crawl] 검색 URL:', webUrl);
+    console.log(`[test-article-crawl] Google News 기사 URL ${filteredCount}건 (전체):`);
+    for (const [i, article] of articles.entries()) {
+      console.log(`  ${i + 1}. ${article.url}`);
+    }
+    console.log('');
+    console.log(`[test-article-crawl] 본문 enrich 대상: ${Math.min(maxArticles, articles.length)}건\n`);
 
     const { enriched, stats } = await enrichArticlesWithBody(articles, browser, {
       maxArticles,
@@ -42,7 +49,6 @@ async function main() {
       console.log(`--- ${i + 1} ---`);
       console.log('제목:', row.title);
       console.log('출처:', row.source ?? '(없음)');
-      console.log('Publisher URL:', row.url);
       console.log('본문 길이:', row.content.length, '자');
       console.log('본문 미리보기:', row.content.slice(0, 200).replace(/\s+/g, ' '), '...');
       console.log('');

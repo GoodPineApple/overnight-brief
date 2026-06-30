@@ -14,7 +14,9 @@
     "send": "tsx scripts/send-emails.ts",
     "test:seed": "tsx scripts/seed-test-data.ts",
     "test:seed:mock": "tsx scripts/seed-test-data.ts --mock-items",
+    "test:process": "tsx scripts/test-openai-pipeline.ts",
     "test:preview": "tsx scripts/preview-newsletter.ts",
+    "test:send": "tsx scripts/test-send-newsletter.ts",
     "test:reset": "tsx scripts/reset-test-data.ts"
   },
   "dependencies": {
